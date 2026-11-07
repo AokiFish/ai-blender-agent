@@ -53,17 +53,18 @@ class McpToolProvider(ToolProvider):
         await self._session.__aenter__()
         await self._session.initialize()
 
-    def _run(self, coro):
+    def _run(self, coro_factory):
+        """先确保连接，再在常驻事件循环上执行协程工厂（先连后建协程）。"""
         self._ensure_connected()
-        return self._loop.run_until_complete(coro)
+        return self._loop.run_until_complete(coro_factory())
 
     # ---- sync API（Agent / Observer / Skills 使用）----
     def sync_list_tools(self) -> list[AgentTool]:
-        raw = self._run(self._session.list_tools())
+        raw = self._run(lambda: self._session.list_tools())
         return self._to_agent_tools(raw.tools)
 
     def sync_call_tool(self, name: str, args: dict) -> ToolResult:
-        res = self._run(self._session.call_tool(name, arguments=args))
+        res = self._run(lambda: self._session.call_tool(name, arguments=args))
         return self._to_tool_result(res)
 
     # ---- async API（兼容）----
@@ -89,7 +90,7 @@ class McpToolProvider(ToolProvider):
             out.append(AgentTool(
                 name=name,
                 description=t.description or "",
-                input_schema=t.inputSchema or {"type": "object", "properties": {}},
+                input_schema=t.input_schema or {"type": "object", "properties": {}},
                 returns_image=returns_img,
             ))
         return out
@@ -104,8 +105,8 @@ class McpToolProvider(ToolProvider):
             elif btype == "image":
                 images.append(base64.b64decode(block.data))
         return ToolResult(
-            ok=not res.isError,
+            ok=not res.is_error,
             content="\n".join(content),
             images=images,
-            error=None if not res.isError else "\n".join(content),
+            error=None if not res.is_error else "\n".join(content),
         )
