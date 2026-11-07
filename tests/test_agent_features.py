@@ -8,9 +8,17 @@ from blender_agent.core.tool_provider import StubToolProvider
 from blender_agent.core.types import ChatMessage
 
 
-def _stub_with_recorder(calls: list):
+def _stub_with_recorder(calls: list, ws_holder: dict | None = None):
     def code_handler(args):
-        calls.append(args.get("code", ""))
+        code = args.get("code", "")
+        calls.append(code)
+        if "DIAG_VIEW" in code and ws_holder and ws_holder.get("ws"):
+            # 模拟诊断渲染：写出假 PNG，让修订循环能拿到图
+            d = os.path.join(ws_holder["ws"], "diag")
+            os.makedirs(d, exist_ok=True)
+            for n in ("front", "side45", "side90"):
+                with open(os.path.join(d, f"{n}.png"), "wb") as f:
+                    f.write(b"\x89PNG fake")
         return "non_manifold_edges:0\nzero_area_faces:0\nmeshes_missing_material:0"
 
     return StubToolProvider({
@@ -46,11 +54,46 @@ def test_agent_extracts_features_and_injects(tmp_path):
     assert any('"fur": "#aa3344"' in c for c in recorded)
 
 
-def test_builder_output_not_modified_by_llm(tmp_path):
-    """构建器产出后不允许 LLM 再执行改写脚本（实测会放大配饰/挪相机）。"""
+def test_builder_followed_by_verifier_loop_only(tmp_path):
+    """构建器产出后不走 skill 计划步骤；接下来只应是诊断渲染 + verifier 驱动修订。"""
+    verifier_json = ('{"score": 9, "should_continue": false, "summary": "达标", "issues": []}')
     reply = ('{"fur": "#aa3344", "stripes": false}')
-    _, _, recorded, _ = _run_with_feature_json(tmp_path, reply)
-    assert len(recorded) == 1, f"构建器之后不应再有脚本执行，实际 {len(recorded)} 次"
+    recorded = []
+    ws_holder = {"ws": str(tmp_path)}
+    provider = _stub_with_recorder(recorded, ws_holder)
+    llm = FakeLLM([ChatMessage(role="assistant", content=reply),
+                   ChatMessage(role="assistant", content=verifier_json)])
+    from blender_agent.config import load_config
+    cfg = load_config()
+    agent = Agent(llm, provider, cfg)
+    agent.cfg.workspace = str(tmp_path)
+    agent.run("参考图片制作猫咪口播角色", image=b"fakejpeg")
+    assert len(recorded) == 2  # 构建脚本 + 诊断渲染，verifier 9 分即停，无补丁
+    assert "DIAG_VIEW" in recorded[1]
+
+
+def test_loop_writes_trajectory_and_lessons(tmp_path):
+    verifier_json = ('{"score": 6, "should_continue": true, "summary": "毛色偏灰", '
+                     '"issues": [{"feature": "fur_color", "expected": "橘", "actual": "灰", '
+                     '"severity": "medium", "fix_hint": "调 Base Color"}]}')
+    reply = '{"fur": "#aa3344", "stripes": false}'
+    recorded = []
+    ws_holder = {"ws": str(tmp_path)}
+    provider = _stub_with_recorder(recorded, ws_holder)
+    llm = FakeLLM([ChatMessage(role="assistant", content=reply),
+                   ChatMessage(role="assistant", content=verifier_json),
+                   ChatMessage(role="assistant", content=verifier_json)])
+    from blender_agent.config import load_config
+    cfg = load_config()
+    agent = Agent(llm, provider, cfg)
+    agent.cfg.workspace = str(tmp_path)
+    agent.run("参考图片制作猫咪口播角色", image=b"x")
+    ls = json.load(open(os.path.join(tmp_path, "lessons.json"), encoding="utf-8"))
+    assert any(i["problem"] == "fur_color" for i in ls)
+    traj = os.path.join(tmp_path, "trajectory")
+    hits = [os.path.join(r, fn) for r, _, fs in os.walk(traj)
+            for fn in fs if fn == "scores.json"]
+    assert hits, "trajectory 下应有 scores.json"
 
 
 def test_agent_without_image_uses_default_params(tmp_path):

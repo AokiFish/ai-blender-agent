@@ -8,7 +8,7 @@ from blender_agent.core.planner import Planner
 from blender_agent.core.executor import Executor
 from blender_agent.core.observer import Observer
 from blender_agent.core.memory import Memory
-from blender_agent.core.types import ChatMessage, Step
+from blender_agent.core.types import ChatMessage, Step, ToolResult
 from blender_agent.skills.scene_understanding import SceneUnderstanding
 from blender_agent.skills.character import Character
 from blender_agent.skills.talking_head import TalkingHead
@@ -110,13 +110,33 @@ class Agent:
                 feat_desc = (f"特征已按参考图提取并注入：{json.dumps(feats.to_params(), ensure_ascii=False)}"
                              if feats else "未提供参考图，使用默认特征")
                 # 构建器已产出完整资产（几何/材质/骨架/控制器/相机全部由代码确定）。
-                # 不再让 LLM 自由改写：实测它会放大配饰、挪相机，反而破坏构图。
+                # 不再让 LLM 自由改写计划步骤；质量提升交给下方 verifier 驱动的修订循环。
                 steps = []
                 history.append(ChatMessage(role="user", content=(
                     f"已用确定性构建器 {name} 生成角色，包含头部/吻部/眼睛(巩膜+虹膜+瞳孔+高光)/"
                     "鼻/嘴(含舌头)/耳/胡须/身体/前爪/尾/项圈+铃铛+蝴蝶结，"
                     "以及 Cat_Armature(11 骨)、MouthOpen/MouthCorner 口型键、Blink 眨眼键、"
                     f"Eye_L/Eye_R 眼球骨骼。{feat_desc}。")))
+                # VIGA 式 write-run-compare-revise 循环：多视角渲染 → 结构化对比 → 定向修补
+                if self.cfg.provider.vision and self.llm is not None:
+                    from blender_agent.core.loop import ReviseLoop
+                    from blender_agent.core.lessons import Lessons
+                    lessons = Lessons(path=os.path.join(
+                        self.cfg.workspace, "lessons.json")).load()
+                    loop = ReviseLoop(self.provider, self.cfg.workspace,
+                                      lessons=lessons, llm=self.llm)
+                    loop.plan_summary = (
+                        f"确定性构建器 {name} 已产出完整角色资产；"
+                        f"特征参数：{json.dumps(feats.to_params(), ensure_ascii=False)}"
+                        if feats else f"确定性构建器 {name} 已产出完整角色资产")
+                    loop_out = loop.run(ref_image=image)
+                    self.memory.record(Step(index=-2, goal="write-run-compare-revise 修订循环"),
+                                       ToolResult(ok=True, content=(
+                                           f"评分序列 {loop_out['scores']}，"
+                                           f"最终 {loop_out['final_score']}，"
+                                           f"轨迹 {loop_out['trajectory']}")))
+                    if loop_out["verified"] and loop_out["final_score"] < 5:
+                        any_failed = True
 
         for step in steps:
             res = self.executor.run_step(step, tools, history)
