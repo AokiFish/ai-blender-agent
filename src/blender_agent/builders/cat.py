@@ -3,14 +3,32 @@
 设计原则：几何、材质、控制器、UV、绑定全部由代码精确计算，
 不依赖 LLM 即兴写建模代码，因此每次运行结果一致、可复现。
 
+特征参数（颜色/条纹/配饰开关）由 build_script(params) 注入，
+默认值与 VLM 未提供特征时的行为完全一致。
+
 坐标系：角色面朝 -Y（Blender 前视图方向），Z 向上。
 """
 
-SCRIPT = r'''
+import json
+
+_DEFAULT_PARAMS = {
+    "fur": "#eb8029", "muzzle": "#ebdecc", "inner_ear": "#f28d9e",
+    "nose": "#f28d9e", "iris": "#8c4d10", "collar": "#e68fa0",
+    "stripes": True, "collar_on": True, "bow": True, "whiskers": True,
+}
+
+_BODY = r'''
 import bpy, math, os
 from mathutils import Vector
 
 WS = "D:/Mydata/WorkBuddy/AI-blender-agent/workspace"
+
+# 特征参数（由 Agent 注入；无注入时用内置默认）
+PARAMS = __PARAMS_JSON__
+
+def hx(h):
+    h = str(h).lstrip("#")
+    return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 # ---------------- 清场 ----------------
 bpy.ops.object.select_all(action='SELECT')
@@ -62,11 +80,13 @@ def mat(name, color, rough=0.55, stripes=False):
     m.diffuse_color = (*color, 1)
     return m
 
-M_FUR   = mat("Cat_Fur", (0.92, 0.50, 0.16), 0.60, stripes=True)
-M_WHITE = mat("Cat_White", (0.92, 0.87, 0.80), 0.6)
-M_PINK  = mat("Cat_Pink", (0.95, 0.55, 0.62), 0.45)
+M_FUR   = mat("Cat_Fur", hx(PARAMS["fur"]), 0.60, stripes=PARAMS["stripes"])
+M_WHITE = mat("Cat_White", hx(PARAMS["muzzle"]), 0.6)
+M_PINK  = mat("Cat_Pink", hx(PARAMS["nose"]), 0.45)
+M_EARIN = mat("Cat_EarIn", hx(PARAMS["inner_ear"]), 0.5)
+M_COLLAR = mat("Cat_Collar", hx(PARAMS["collar"]), 0.5)
 M_DARK  = mat("Cat_Dark", (0.10, 0.07, 0.07), 0.9)
-M_IRIS  = mat("Cat_Iris", (0.55, 0.30, 0.06), 0.25)
+M_IRIS  = mat("Cat_Iris", hx(PARAMS["iris"]), 0.25)
 M_GOLD  = mat("Cat_Gold", (0.90, 0.72, 0.20), 0.25)
 
 # ---------------- 几何工具 ----------------
@@ -153,10 +173,11 @@ for side, sx in (("L", -1), ("R", 1)):
     parts[f"ear_{side}"] = cone(f"Cat_Ear_{side}", (0.60 * sx, HEAD_C.y + 0.02, 2.62),
                                 (0.30, 0.17, 0.36), M_FUR, rot=(math.radians(-8), math.radians(14) * sx, 0))
     parts[f"ear_in_{side}"] = cone(f"Cat_EarInner_{side}", (0.60 * sx, HEAD_C.y - 0.10, 2.56),
-                                   (0.18, 0.10, 0.26), M_PINK, rot=(math.radians(-8), math.radians(14) * sx, 0))
+                                   (0.18, 0.10, 0.26), M_EARIN, rot=(math.radians(-8), math.radians(14) * sx, 0))
 
-# ---------------- 胡须 ----------------
-for side, sx in (("L", -1), ("R", 1)):
+# ---------------- 胡须（可选） ----------------
+if PARAMS["whiskers"]:
+  for side, sx in (("L", -1), ("R", 1)):
     for i, (dz, tilt) in enumerate([(0.10, 8), (0.0, 0), (-0.09, -8)], start=1):
         base_x = 0.42 * sx
         parts[f"whisker_{side}{i}"] = cylinder(
@@ -177,13 +198,15 @@ tail_pts = [Vector((0.62, 0.62, 0.55)), Vector((0.86, 0.90, 0.95)), Vector((0.92
 for i, p in enumerate(tail_pts, start=1):
     parts[f"tail{i}"] = sphere(f"Cat_Tail{i}", p, (0.13, 0.13, 0.22), M_FUR, 24, 12)
 
-# ---------------- 项圈 / 铃铛 / 蝴蝶结 ----------------
-parts["collar"] = torus("Cat_Collar", (0, 0.06, 1.12), 0.66, 0.065, M_PINK, rot=(math.radians(8), 0, 0))
-parts["bell"] = sphere("Cat_Bell", (0, -0.58, 1.02), (0.115, 0.10, 0.12), M_GOLD)
-for side, sx in (("L", -1), ("R", 1)):
-    parts[f"bow_{side}"] = sphere(f"Cat_Bow_{side}", (0.17 * sx, -0.62, 1.16),
-                                  (0.17, 0.07, 0.11), M_PINK)
-parts["bow_c"] = sphere("Cat_BowCenter", (0, -0.66, 1.16), (0.06, 0.05, 0.06), M_PINK)
+# ---------------- 项圈 / 铃铛 / 蝴蝶结（可选） ----------------
+if PARAMS["collar_on"]:
+  parts["collar"] = torus("Cat_Collar", (0, 0.06, 1.12), 0.66, 0.065, M_COLLAR, rot=(math.radians(8), 0, 0))
+  parts["bell"] = sphere("Cat_Bell", (0, -0.58, 1.02), (0.115, 0.10, 0.12), M_GOLD)
+  if PARAMS["bow"]:
+    for side, sx in (("L", -1), ("R", 1)):
+        parts[f"bow_{side}"] = sphere(f"Cat_Bow_{side}", (0.17 * sx, -0.62, 1.16),
+                                      (0.17, 0.07, 0.11), M_COLLAR)
+    parts["bow_c"] = sphere("Cat_BowCenter", (0, -0.66, 1.16), (0.06, 0.05, 0.06), M_COLLAR)
 
 # ---------------- Shape Keys：眨眼 / 口型 ----------------
 def add_blink(objs, name="Blink"):
@@ -323,3 +346,16 @@ bpy.ops.export_scene.gltf(filepath=os.path.join(WS, "cat.glb").replace("\\", "/"
 
 print("BUILD_OK parts=%d bones=%d" % (len(parts), len(arm_data.bones)))
 '''
+
+
+def build_script(params: dict | None = None) -> str:
+    """生成构建脚本；params 键必须是 _DEFAULT_PARAMS 的子集，未知键忽略。"""
+    p = dict(_DEFAULT_PARAMS)
+    if params:
+        for k, v in params.items():
+            if k in p:
+                p[k] = v
+    return _BODY.replace("__PARAMS_JSON__", json.dumps(p))
+
+
+SCRIPT = build_script()

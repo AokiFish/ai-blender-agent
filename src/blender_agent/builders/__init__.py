@@ -4,14 +4,15 @@
 结果可复现，避免小模型即兴写建模代码导致几何错乱。
 """
 
-from blender_agent.builders.cat import SCRIPT as CAT_SCRIPT
+from blender_agent.builders.cat import build_script as _cat_builder
 
-BUILDERS: dict[tuple[str, ...], tuple[str, str]] = {
-    ("猫", "cat", "猫咪"): ("cat", CAT_SCRIPT),
+BUILDERS: dict[tuple[str, ...], tuple[str, object]] = {
+    # 值为 (名称, 脚本工厂)；工厂接受可选 params dict，返回 bpy 脚本文本
+    ("猫", "cat", "猫咪"): ("cat", _cat_builder),
 }
 
 
-def match_builder(goal: str) -> tuple[str, str] | None:
+def match_builder(goal: str) -> tuple[str, object] | None:
     g = goal.lower()
     for keywords, builder in BUILDERS.items():
         if any(k.lower() in g for k in keywords):
