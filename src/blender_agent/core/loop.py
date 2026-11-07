@@ -14,7 +14,7 @@ from blender_agent.core.types import ChatMessage
 from blender_agent.core.verifier import verify
 from blender_agent.core.lessons import Lessons, format_lessons
 
-MAX_ROUNDS = 4
+MAX_ROUNDS = 3
 SCORE_THRESHOLD = 8.0
 
 # 多视角诊断渲染：3 个机位各渲一张，正面/45°/侧面
@@ -31,7 +31,8 @@ mn = Vector((1e9, 1e9, 1e9)); mx = Vector((-1e9, -1e9, -1e9))
 for o in meshes:
     for c in o.bound_box:
         w = o.matrix_world @ Vector(c)
-        mn = Vector(map(min, mn, w)); mx = Vector(map(max, mx, w))
+        mn = Vector((min(mn.x, w.x), min(mn.y, w.y), min(mn.z, w.z)))
+        mx = Vector((max(mx.x, w.x), max(mx.y, w.y), max(mx.z, w.z)))
 center = (mn + mx) / 2
 radius = max((mx - mn).length / 2, 1.0)
 
@@ -41,12 +42,19 @@ cam = bpy.data.objects.new("DiagCam", cam_data)
 bpy.context.scene.collection.objects.link(cam)
 old_render = bpy.context.scene.render.filepath
 old_fmt = bpy.context.scene.render.image_settings.file_format
+old_res = (bpy.context.scene.render.resolution_x, bpy.context.scene.render.resolution_y)
+old_samples = getattr(getattr(bpy.context.scene, "eevee", None), "taa_render_samples", None)
 bpy.context.scene.render.image_settings.file_format = 'PNG'
+# 诊断图只给 VLM 看：640px + 16 采样，渲染耗时从 ~20s/张 压到 ~2s/张
+bpy.context.scene.render.resolution_x = 640
+bpy.context.scene.render.resolution_y = 640
+if hasattr(bpy.context.scene, "eevee"):
+    bpy.context.scene.eevee.taa_render_samples = 16
 
 for name, az in (("front", 0), ("side45", -45), ("side90", -90)):
     a = math.radians(az)
     d = radius * 2.4
-    cam.location = center + Vector(d * math.sin(a), -d * math.cos(a), radius * 0.35)
+    cam.location = center + Vector((d * math.sin(a), -d * math.cos(a), radius * 0.35))
     direction = center - cam.location
     cam.rotation_euler = direction.to_track_quat('-Z', 'Y').to_euler()
     bpy.context.scene.camera = cam
@@ -58,6 +66,9 @@ for name, az in (("front", 0), ("side45", -45), ("side90", -90)):
 bpy.context.scene.camera = old_cam
 bpy.context.scene.render.filepath = old_render
 bpy.context.scene.render.image_settings.file_format = old_fmt
+bpy.context.scene.render.resolution_x, bpy.context.scene.render.resolution_y = old_res
+if old_samples is not None and hasattr(bpy.context.scene, "eevee"):
+    bpy.context.scene.eevee.taa_render_samples = old_samples
 bpy.data.objects.remove(cam, do_unlink=True)
 print("RENDER_VIEWS_OK")
 '''

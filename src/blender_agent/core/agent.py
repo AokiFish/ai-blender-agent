@@ -97,11 +97,16 @@ class Agent:
             name, make = builder
             feats = None
             if image and self.cfg.provider.vision:
-                from blender_agent.core.features import extract_features
-                feats = extract_features(self.llm, image)
-                with open(os.path.join(self.cfg.workspace, "features.json"),
-                          "w", encoding="utf-8") as f:
-                    json.dump(feats.to_params(), f, ensure_ascii=False, indent=2)
+                from blender_agent.core.features import extract_features, CatFeatures
+                cache = os.path.join(self.cfg.workspace, "features.json")
+                if os.path.exists(cache):
+                    # 缓存命中：同一参考图不重复做 VLM 特征提取（一次 ~50s）
+                    with open(cache, encoding="utf-8") as f:
+                        feats = CatFeatures.from_json(f.read())
+                else:
+                    feats = extract_features(self.llm, image)
+                    with open(cache, "w", encoding="utf-8") as f:
+                        json.dump(feats.to_params(), f, ensure_ascii=False, indent=2)
             script = make(feats.to_params() if feats else None)
             bres = self.provider.sync_call_tool("execute_blender_code", {"code": script})
             self.memory.record(Step(index=-1, goal=f"确定性构建器：{name}"), bres)

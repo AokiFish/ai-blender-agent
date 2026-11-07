@@ -13,7 +13,7 @@ class LLMClient:
         self._client = OpenAI(base_url=provider.base_url, api_key=provider.api_key)
 
     def chat(self, messages: list[ChatMessage], tools: list[dict] | None = None,
-             max_retries: int = 6) -> ChatMessage:
+             max_retries: int = 3) -> ChatMessage:
         payload = [self._to_oai(m) for m in messages]
         last_err = None
         for attempt in range(max_retries):
@@ -27,19 +27,22 @@ class LLMClient:
                     kwargs["tool_choice"] = "auto"
                 resp = self._client.chat.completions.create(**kwargs)
                 return self._from_oai(resp)
-            except Exception as e:  # noqa: 限速/网络抖动退避重试（免费模型 429 常见，需长等待）
+            except Exception as e:  # noqa: 限速/网络抖动退避重试；退避上限压短，避免单调用挂几分钟
                 last_err = e
                 if attempt < max_retries - 1:
-                    time.sleep(min(5 * 2 ** attempt, 60))  # 5/10/20/40/60 秒退避
+                    time.sleep(min(3 * 2 ** attempt, 15))  # 3/6/12 秒
         raise RuntimeError(f"LLM 调用失败（重试 {max_retries} 次）: {last_err}")
 
     def _to_oai(self, m: ChatMessage) -> dict:
-        if m.images:  # 多模态：图片作为 image_url content part 传给 LLM
+        from blender_agent.core.images import shrink_image
+        if m.images:  # 多模态：压缩后再传（大 PNG 是视觉调用延迟与限速的主因）
             content = [{"type": "text", "text": m.content or ""}]
             for img in m.images:
-                b64 = base64.b64encode(img).decode()
+                small = shrink_image(img)
+                mime = "image/jpeg" if small is not img else "image/png"
+                b64 = base64.b64encode(small).decode()
                 content.append({"type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{b64}"}})
+                                "image_url": {"url": f"data:{mime};base64,{b64}"}})
         else:
             content = m.content or ""
         d = {"role": m.role, "content": content}
