@@ -70,6 +70,45 @@ class Agent:
         reply = self.llm.chat([ChatMessage(role="user", content=ask, images=imgs)])
         return "PASS" in (reply.content or "").upper()
 
+    def _try_model3d(self, image: bytes | None, history: list[ChatMessage]) -> bool:
+        """配置了 3D 后端时走 image-to-3D 并绑定口播骨架；返回是否成功。
+
+        整层是可选的：没配置 / 额度不足 / 生成失败都返回 False，
+        由调用方回落到确定性构建器，绝不阻断任务。
+        """
+        from blender_agent.core.model3d import (Model3DRequest, configure_provider,
+                                                generate_mesh, provider_from_env)
+        conf = provider_from_env()
+        if not conf or not image:
+            return False
+        provider, key = conf
+        ref_path = os.path.join(self.cfg.workspace, "reference.png")
+        if not os.path.exists(ref_path):
+            with open(ref_path, "wb") as f:
+                f.write(image)
+        images = [os.path.abspath(ref_path)]
+        if os.getenv("BLENDER_AGENT_VIEWS", "0") == "1":
+            # 可选：图片模型生成多视角定妆图，作为重建输入与质检对照
+            from blender_agent.core.viewgen import generate_views
+            views = generate_views(image, os.path.join(self.cfg.workspace, "views"))
+            if views:
+                images = [os.path.abspath(p) for p in views]
+        setup = self.provider.sync_call_tool(
+            "execute_blender_code", {"code": configure_provider(provider, key)})
+        self.memory.record(Step(index=-3, goal=f"配置 3D 后端：{provider}"), setup)
+        out = generate_mesh(self.provider,
+                            Model3DRequest(provider=provider, images=images, name="Character3D"))
+        ok = not out.startswith("ERROR")
+        self.memory.record(Step(index=-3, goal=f"image-to-3D：{provider}"),
+                           ToolResult(ok=ok, content=out[:800]))
+        if not ok:
+            return False
+        from blender_agent.builders.rig import rig_script
+        rres = self.provider.sync_call_tool("execute_blender_code", {"code": rig_script()})
+        self.memory.record(Step(index=-3, goal="通用口播绑定 TalkingRig"), rres)
+        history.append(ChatMessage(role="user", content=f"3D 生成结果：{out[:300]}"))
+        return rres.ok
+
     def run(self, goal: str, image: bytes | None = None) -> dict:
         os.makedirs(self.cfg.workspace, exist_ok=True)
         steps = self._pick_skill_steps(goal, has_image=image is not None)
@@ -96,59 +135,72 @@ class Agent:
         if builder and hasattr(self.provider, "sync_call_tool"):
             name, make = builder
             feats = None
-            if image and self.cfg.provider.vision:
-                from blender_agent.core.features import extract_features, CatFeatures
-                cache = os.path.join(self.cfg.workspace, "features.json")
-                if os.path.exists(cache):
-                    # 缓存命中：同一参考图不重复做 VLM 特征提取（一次 ~50s）
-                    with open(cache, encoding="utf-8") as f:
-                        feats = CatFeatures.from_json(f.read())
-                else:
-                    feats = extract_features(self.llm, image)
-                    with open(cache, "w", encoding="utf-8") as f:
-                        json.dump(feats.to_params(), f, ensure_ascii=False, indent=2)
-            script = make(feats.to_params() if feats else None)
-            bres = self.provider.sync_call_tool("execute_blender_code", {"code": script})
-            self.memory.record(Step(index=-1, goal=f"确定性构建器：{name}"), bres)
-            builder_ok = bres.ok
-            if bres.ok:
-                feat_desc = (f"特征已按参考图提取并注入：{json.dumps(feats.to_params(), ensure_ascii=False)}"
-                             if feats else "未提供参考图，使用默认特征")
-                # 构建器已产出完整资产（几何/材质/骨架/控制器/相机全部由代码确定）。
-                # 不再让 LLM 自由改写计划步骤；质量提升交给下方 verifier 驱动的修订循环。
+            built_desc = ""
+            # ① 外部 3D 后端（image-to-3D）优先：形体来自真实网格，远超参数化拼装；
+            #    未配置后端 / 无额度 / 生成失败时自动回落到确定性构建器。
+            mesh3d_ok = self._try_model3d(image, history) if image else False
+            if mesh3d_ok:
+                builder_ok = True
                 steps = []
+                built_desc = ("image-to-3D 真实网格 + 通用口播绑定"
+                              "（TalkingRig：Jaw / Eye_L / Eye_R + Blink / MouthOpen 形态键）")
                 history.append(ChatMessage(role="user", content=(
-                    f"已用确定性构建器 {name} 生成角色，包含头部/吻部/眼睛(巩膜+虹膜+瞳孔+高光)/"
-                    "鼻/嘴(含舌头)/耳/胡须/身体/前爪/尾/项圈+铃铛+蝴蝶结，"
-                    "以及 Cat_Armature(11 骨)、MouthOpen/MouthCorner 口型键、Blink 眨眼键、"
-                    f"Eye_L/Eye_R 眼球骨骼。{feat_desc}。")))
-                # VIGA 式 write-run-compare-revise 循环：多视角渲染 → 结构化对比 → 定向修补
-                if self.cfg.provider.vision and self.llm is not None:
-                    from blender_agent.core.loop import ReviseLoop
-                    from blender_agent.core.lessons import Lessons
-                    lessons = Lessons(path=os.path.join(
-                        self.cfg.workspace, "lessons.json")).load()
-                    loop = ReviseLoop(self.provider, self.cfg.workspace,
-                                      lessons=lessons, llm=self.llm)
-                    loop.plan_summary = (
-                        f"确定性构建器 {name} 已产出完整角色资产；"
-                        f"特征参数：{json.dumps(feats.to_params(), ensure_ascii=False)}"
-                        if feats else f"确定性构建器 {name} 已产出完整角色资产")
-                    try:
-                        loop_out = loop.run(ref_image=image)
-                    except Exception as e:  # noqa: 循环内任何异常都不该阻断交付
-                        loop_out = {"scores": [], "final_score": 0.0,
-                                    "verified": False, "trajectory": ""}
-                        self.memory.record(Step(index=-2, goal="修订循环异常"),
-                                           ToolResult(ok=False, content=repr(e)))
+                    f"已用 image-to-3D 后端生成角色网格并完成绑定：{built_desc}。"
+                    "请只做材质/灯光层面的核验，不要改拓扑或重建。")))
+            else:
+                if image and self.cfg.provider.vision:
+                    from blender_agent.core.features import extract_features, CatFeatures
+                    cache = os.path.join(self.cfg.workspace, "features.json")
+                    if os.path.exists(cache):
+                        # 缓存命中：同一参考图不重复做 VLM 特征提取（一次 ~50s）
+                        with open(cache, encoding="utf-8") as f:
+                            feats = CatFeatures.from_json(f.read())
                     else:
-                        self.memory.record(Step(index=-2, goal="write-run-compare-revise 修订循环"),
-                                           ToolResult(ok=True, content=(
-                                               f"评分序列 {loop_out['scores']}，"
-                                               f"最终 {loop_out['final_score']}，"
-                                               f"轨迹 {loop_out['trajectory']}")))
-                    if loop_out["verified"] and loop_out["final_score"] < 5:
-                        any_failed = True
+                        feats = extract_features(self.llm, image)
+                        with open(cache, "w", encoding="utf-8") as f:
+                            json.dump(feats.to_params(), f, ensure_ascii=False, indent=2)
+                script = make(feats.to_params() if feats else None)
+                bres = self.provider.sync_call_tool("execute_blender_code", {"code": script})
+                self.memory.record(Step(index=-1, goal=f"确定性构建器：{name}"), bres)
+                builder_ok = bres.ok
+                if bres.ok:
+                    feat_desc = (f"特征已按参考图提取并注入：{json.dumps(feats.to_params(), ensure_ascii=False)}"
+                                 if feats else "未提供参考图，使用默认特征")
+                    # 构建器已产出完整资产（几何/材质/骨架/控制器/相机全部由代码确定）。
+                    # 不再让 LLM 自由改写计划步骤；质量提升交给下方 verifier 驱动的修订循环。
+                    steps = []
+                    built_desc = f"确定性构建器 {name}（38 部件 / 11 骨 / 口型与眨眼控制器）"
+                    history.append(ChatMessage(role="user", content=(
+                        f"已用确定性构建器 {name} 生成角色，包含头部/吻部/眼睛(巩膜+虹膜+瞳孔+高光)/"
+                        "鼻/嘴(含舌头)/耳/胡须/身体/前爪/尾/项圈+铃铛+蝴蝶结，"
+                        "以及 Cat_Armature(11 骨)、MouthOpen/MouthCorner 口型键、Blink 眨眼键、"
+                        f"Eye_L/Eye_R 眼球骨骼。{feat_desc}。")))
+            # ② VIGA 式 write-run-compare-revise 循环：两条路径共用
+            if builder_ok and self.cfg.provider.vision and self.llm is not None:
+                from blender_agent.core.loop import ReviseLoop
+                from blender_agent.core.lessons import Lessons
+                lessons = Lessons(path=os.path.join(
+                    self.cfg.workspace, "lessons.json")).load()
+                loop = ReviseLoop(self.provider, self.cfg.workspace,
+                                  lessons=lessons, llm=self.llm)
+                loop.plan_summary = (
+                    f"{built_desc}；特征参数：{json.dumps(feats.to_params(), ensure_ascii=False)}"
+                    if feats else built_desc)
+                try:
+                    loop_out = loop.run(ref_image=image)
+                except Exception as e:  # noqa: 循环内任何异常都不该阻断交付
+                    loop_out = {"scores": [], "final_score": 0.0,
+                                "verified": False, "trajectory": ""}
+                    self.memory.record(Step(index=-2, goal="修订循环异常"),
+                                       ToolResult(ok=False, content=repr(e)))
+                else:
+                    self.memory.record(Step(index=-2, goal="write-run-compare-revise 修订循环"),
+                                       ToolResult(ok=True, content=(
+                                           f"评分序列 {loop_out['scores']}，"
+                                           f"最终 {loop_out['final_score']}，"
+                                           f"轨迹 {loop_out['trajectory']}")))
+                if loop_out["verified"] and loop_out["final_score"] < 5:
+                    any_failed = True
 
         for step in steps:
             try:
