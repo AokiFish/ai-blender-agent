@@ -99,6 +99,65 @@ def generate_mesh(provider_mcp, req: Model3DRequest) -> str:
     return f"ERROR: timeout, last={last[:200]}"
 
 
+# ---------- local 后端：Hunyuan3D-2mini（自托管，无额度限制） ----------
+
+HUNYUAN3D_HOME = os.environ.get(
+    "HUNYUAN3D_HOME", r"D:/Mytools/design/Blender2023/hunyuan3d"
+)
+LOCAL_TIMEOUT_SECONDS = 900
+
+
+def local_backend_available() -> bool:
+    """本地 Hunyuan3D venv + runner 是否就绪。"""
+    py = os.path.join(HUNYUAN3D_HOME, "venv", "Scripts", "python.exe")
+    runner = os.path.join(HUNYUAN3D_HOME, "local_gen.py")
+    return os.path.isfile(py) and os.path.isfile(runner)
+
+
+@dataclass
+class LocalMeshResult:
+    output_path: str
+    faces: int = 0
+    verts: int = 0
+    seconds: float = 0.0
+
+
+def generate_mesh_local(
+    image_path: str,
+    output_path: str,
+    steps: int = 30,
+    octree_resolution: int = 256,
+) -> LocalMeshResult:
+    """本地 Hunyuan3D 推理：单图 -> glb。失败抛 RuntimeError（调用方决定回落）。"""
+    import subprocess
+
+    if not local_backend_available():
+        raise RuntimeError("local hunyuan3d backend not installed")
+    py = os.path.join(HUNYUAN3D_HOME, "venv", "Scripts", "python.exe")
+    runner = os.path.join(HUNYUAN3D_HOME, "local_gen.py")
+    proc = subprocess.run(
+        [py, runner, os.path.abspath(image_path), os.path.abspath(output_path),
+         str(steps), str(octree_resolution)],
+        capture_output=True, text=True, timeout=LOCAL_TIMEOUT_SECONDS,
+        encoding="utf-8", errors="replace",
+    )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    for line in reversed(out.splitlines()):
+        if line.startswith("SHAPE_DONE"):
+            # SHAPE_DONE 170.4 s | faces: 332040 | verts: 166019
+            try:
+                secs = float(line.split()[1])
+                faces = int(re.search(r"faces:\s*(\d+)", line).group(1))
+                verts = int(re.search(r"verts:\s*(\d+)", line).group(1))
+                return LocalMeshResult(os.path.abspath(output_path), faces, verts, secs)
+            except (ValueError, AttributeError):
+                break
+    if proc.returncode != 0 or not os.path.isfile(output_path):
+        tail = out.strip().splitlines()[-1][:200] if out.strip() else "no output"
+        raise RuntimeError(f"local generation failed: {tail}")
+    return LocalMeshResult(os.path.abspath(output_path))
+
+
 def provider_from_env() -> tuple[str, str] | None:
     """读 .env 里的通用配置：BLENDER_AGENT_3D_PROVIDER / BLENDER_AGENT_3D_API_KEY。
 

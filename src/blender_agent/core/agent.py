@@ -70,12 +70,52 @@ class Agent:
         reply = self.llm.chat([ChatMessage(role="user", content=ask, images=imgs)])
         return "PASS" in (reply.content or "").upper()
 
+    def _try_local_model3d(self, image: bytes | None, history: list[ChatMessage]) -> bool:
+        """本地 Hunyuan3D 生成（零额度、离线）：glb -> 导入 -> 顶点色 -> 口播绑定。"""
+        if not image:
+            return False
+        from blender_agent.core.model3d import generate_mesh_local, local_backend_available
+        if not local_backend_available():
+            return False
+        ref_path = os.path.join(self.cfg.workspace, "reference.png")
+        if not os.path.exists(ref_path):
+            with open(ref_path, "wb") as f:
+                f.write(image)
+        glb = os.path.join(self.cfg.workspace, "local3d.glb")
+        try:
+            res = generate_mesh_local(ref_path, glb)
+        except Exception as e:  # 本地推理失败不该阻断整体任务，交回上层回落
+            self.memory.record(Step(index=-3, goal="本地 3D 生成失败，回落在线/构建器"),
+                               ToolResult(ok=False, content=str(e)[:300]))
+            return False
+
+        from blender_agent.builders.local_mesh import import_local_mesh_script
+        from blender_agent.core.cutout import make_cutout_npy
+        npy = make_cutout_npy(ref_path, os.path.join(self.cfg.workspace, "cutout.npy"))
+        code = import_local_mesh_script(glb, npy)
+        ires = self.provider.sync_call_tool("execute_blender_code", {"code": code})
+        self.memory.record(
+            Step(index=-3, goal=f"导入本地网格 {res.faces} 面 / {res.seconds:.0f}s"), ires)
+        if not ires.ok:
+            return False
+
+        from blender_agent.builders.rig import rig_script
+        rres = self.provider.sync_call_tool("execute_blender_code", {"code": rig_script()})
+        self.memory.record(Step(index=-3, goal="通用口播绑定 TalkingRig"), rres)
+        history.append(ChatMessage(role="user", content=(
+            f"已用本地 Hunyuan3D 生成角色网格（{res.faces} 面，"
+            f"{res.seconds:.0f} 秒）并完成绑定。请只做材质/灯光核验，不要改拓扑或重建。")))
+        return rres.ok
+
     def _try_model3d(self, image: bytes | None, history: list[ChatMessage]) -> bool:
         """配置了 3D 后端时走 image-to-3D 并绑定口播骨架；返回是否成功。
 
+        优先级：本地 Hunyuan3D（零额度） -> 在线 provider（需 key/额度）。
         整层是可选的：没配置 / 额度不足 / 生成失败都返回 False，
         由调用方回落到确定性构建器，绝不阻断任务。
         """
+        if self._try_local_model3d(image, history):
+            return True
         from blender_agent.core.model3d import (Model3DRequest, configure_provider,
                                                 generate_mesh, provider_from_env)
         conf = provider_from_env()

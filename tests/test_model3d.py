@@ -66,3 +66,45 @@ def test_configure_provider_script_contains_key_without_leaking_in_logs():
     code = configure_provider("tripo", "tsk_secret_value")
     assert 'blendermcp_use_tripo = True' in code
     assert "tsk_secret_value" in code  # 代码要带密钥，但返回值不用于日志
+
+
+def test_local_backend_available_false_when_missing():
+    from blender_agent.core import model3d
+    old = model3d.HUNYUAN3D_HOME
+    model3d.HUNYUAN3D_HOME = r"C:/definitely/not/here"
+    try:
+        assert model3d.local_backend_available() is False
+    finally:
+        model3d.HUNYUAN3D_HOME = old
+
+
+def test_generate_mesh_local_parses_output(tmp_path, monkeypatch):
+    from blender_agent.core import model3d
+
+    glb = tmp_path / "out.glb"
+    glb.write_bytes(b"glb")
+
+    class FakeProc:
+        returncode = 0
+        stdout = "SHAPE_DONE 170.4 s | faces: 332040 | verts: 166019\nEXPORTED x\nLOCAL_OK\n"
+        stderr = ""
+
+    monkeypatch.setattr(model3d, "local_backend_available", lambda: True)
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: FakeProc())
+    res = model3d.generate_mesh_local("img.png", str(glb))
+    assert res.faces == 332040 and res.verts == 166019
+    assert abs(res.seconds - 170.4) < 0.01
+
+
+def test_generate_mesh_local_raises_on_failure(tmp_path, monkeypatch):
+    from blender_agent.core import model3d
+
+    class FakeProc:
+        returncode = 1
+        stdout = "ERROR: CUDA out of memory"
+        stderr = ""
+
+    monkeypatch.setattr(model3d, "local_backend_available", lambda: True)
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: FakeProc())
+    with pytest.raises(RuntimeError, match="out of memory"):
+        model3d.generate_mesh_local("img.png", str(tmp_path / "o.glb"))
