@@ -1,3 +1,4 @@
+import json
 import os
 
 from blender_agent.config import AgentConfig, load_config
@@ -88,13 +89,24 @@ class Agent:
 
         # 确定性构建器优先：命中模板时先跑参数化建模脚本（几何/材质/控制器可复现），
         # 再由 LLM 只做检查与微调，避免小模型即兴写建模代码导致几何错乱。
+        # 有参考图且模型支持视觉时：先 VLM 提取特征（颜色/斑纹/配饰）注入构建参数。
         from blender_agent.builders import match_builder
         builder = match_builder(goal)
         if builder and hasattr(self.provider, "sync_call_tool"):
-            name, script = builder
+            name, make = builder
+            feats = None
+            if image and self.cfg.provider.vision:
+                from blender_agent.core.features import extract_features
+                feats = extract_features(self.llm, image)
+                with open(os.path.join(self.cfg.workspace, "features.json"),
+                          "w", encoding="utf-8") as f:
+                    json.dump(feats.to_params(), f, ensure_ascii=False, indent=2)
+            script = make(feats.to_params() if feats else None)
             bres = self.provider.sync_call_tool("execute_blender_code", {"code": script})
             self.memory.record(Step(index=-1, goal=f"确定性构建器：{name}"), bres)
             if bres.ok:
+                feat_desc = (f"特征已按参考图提取并注入：{json.dumps(feats.to_params(), ensure_ascii=False)}"
+                             if feats else "未提供参考图，使用默认特征")
                 steps = [Step(index=0, goal=(
                     f"参数化构建器已生成角色，用 look 检查外观并修补："
                     f"缺失五官/颜色分区错误/控制器缺失都要当场修（原始目标：{goal}）"))]
@@ -102,7 +114,7 @@ class Agent:
                     f"已用确定性构建器 {name} 生成角色，包含头部/吻部/眼睛(巩膜+虹膜+瞳孔+高光)/"
                     "鼻/嘴(含舌头)/耳/胡须/身体/前爪/尾/项圈+铃铛+蝴蝶结，"
                     "以及 Cat_Armature(11 骨)、MouthOpen/MouthCorner 口型键、Blink 眨眼键、"
-                    "Eye_L/Eye_R 眼球骨骼。请在此基础上检查并微调，不要重建。")))
+                    f"Eye_L/Eye_R 眼球骨骼。{feat_desc}。请在此基础上检查并微调，不要重建。")))
 
         for step in steps:
             res = self.executor.run_step(step, tools, history)
