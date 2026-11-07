@@ -13,7 +13,7 @@ class ModelProvider(BaseModel):
     name: str = "openrouter"
     base_url: str = "https://openrouter.ai/api/v1"
     api_key: str = ""
-    model: str = "google/gemma-4-31b-it:free"
+    model: str = "nvidia/nemotron-3.5-super-vl:free"
     vision: bool = True
     max_tokens: int = 4096
     temperature: float = 0.2
