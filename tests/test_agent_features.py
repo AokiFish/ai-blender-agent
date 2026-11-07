@@ -46,6 +46,13 @@ def test_agent_extracts_features_and_injects(tmp_path):
     assert any('"fur": "#aa3344"' in c for c in recorded)
 
 
+def test_builder_output_not_modified_by_llm(tmp_path):
+    """构建器产出后不允许 LLM 再执行改写脚本（实测会放大配饰/挪相机）。"""
+    reply = ('{"fur": "#aa3344", "stripes": false}')
+    _, _, recorded, _ = _run_with_feature_json(tmp_path, reply)
+    assert len(recorded) == 1, f"构建器之后不应再有脚本执行，实际 {len(recorded)} 次"
+
+
 def test_agent_without_image_uses_default_params(tmp_path):
     recorded = []
     provider = _stub_with_recorder(recorded)

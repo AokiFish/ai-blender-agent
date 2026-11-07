@@ -348,6 +348,17 @@ print("BUILD_OK parts=%d bones=%d" % (len(parts), len(arm_data.bones)))
 '''
 
 
+def _render_params(p: dict) -> str:
+    """渲染成 Python 字面量（布尔必须是 True/False，不能是 JSON 的 true/false）。"""
+    items = []
+    for k, v in p.items():
+        if isinstance(v, bool):
+            items.append(f'"{k}": {"True" if v else "False"}')
+        else:
+            items.append(f'"{k}": {json.dumps(v)}')
+    return "{" + ", ".join(items) + "}"
+
+
 def build_script(params: dict | None = None) -> str:
     """生成构建脚本；params 键必须是 _DEFAULT_PARAMS 的子集，未知键忽略。"""
     p = dict(_DEFAULT_PARAMS)
@@ -355,7 +366,7 @@ def build_script(params: dict | None = None) -> str:
         for k, v in params.items():
             if k in p:
                 p[k] = v
-    return _BODY.replace("__PARAMS_JSON__", json.dumps(p))
+    return _BODY.replace("__PARAMS_JSON__", _render_params(p))
 
 
 SCRIPT = build_script()

@@ -86,6 +86,7 @@ class Agent:
         tools = (self.provider.sync_list_tools()
                  if hasattr(self.provider, "sync_list_tools") else [])
         any_failed = False
+        builder_ok = False
 
         # 确定性构建器优先：命中模板时先跑参数化建模脚本（几何/材质/控制器可复现），
         # 再由 LLM 只做检查与微调，避免小模型即兴写建模代码导致几何错乱。
@@ -104,17 +105,18 @@ class Agent:
             script = make(feats.to_params() if feats else None)
             bres = self.provider.sync_call_tool("execute_blender_code", {"code": script})
             self.memory.record(Step(index=-1, goal=f"确定性构建器：{name}"), bres)
+            builder_ok = bres.ok
             if bres.ok:
                 feat_desc = (f"特征已按参考图提取并注入：{json.dumps(feats.to_params(), ensure_ascii=False)}"
                              if feats else "未提供参考图，使用默认特征")
-                steps = [Step(index=0, goal=(
-                    f"参数化构建器已生成角色，用 look 检查外观并修补："
-                    f"缺失五官/颜色分区错误/控制器缺失都要当场修（原始目标：{goal}）"))]
+                # 构建器已产出完整资产（几何/材质/骨架/控制器/相机全部由代码确定）。
+                # 不再让 LLM 自由改写：实测它会放大配饰、挪相机，反而破坏构图。
+                steps = []
                 history.append(ChatMessage(role="user", content=(
                     f"已用确定性构建器 {name} 生成角色，包含头部/吻部/眼睛(巩膜+虹膜+瞳孔+高光)/"
                     "鼻/嘴(含舌头)/耳/胡须/身体/前爪/尾/项圈+铃铛+蝴蝶结，"
                     "以及 Cat_Armature(11 骨)、MouthOpen/MouthCorner 口型键、Blink 眨眼键、"
-                    f"Eye_L/Eye_R 眼球骨骼。{feat_desc}。请在此基础上检查并微调，不要重建。")))
+                    f"Eye_L/Eye_R 眼球骨骼。{feat_desc}。")))
 
         for step in steps:
             res = self.executor.run_step(step, tools, history)
@@ -132,6 +134,8 @@ class Agent:
             if self._visual_qc(image):
                 break
             any_failed = True
+            if builder_ok:  # 构建器产物不做 LLM 自由改写（会破坏比例/构图），只标记不合格
+                break
             fix = Step(index=90 + round_no, goal=(
                 "视觉质检不达标，根据参考图与当前渲染的差距修复角色外观："
                 "缺五官几何就补几何，颜色未分区就按面重新分配材质，"
