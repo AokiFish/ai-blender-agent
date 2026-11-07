@@ -167,12 +167,16 @@ class Agent:
                 fix_step = Step(index=step.index, goal=f"修复：{'；'.join(report['issues'])}")
                 self.executor.run_step(fix_step, tools, history)
         # 视觉质检闭环：渲染 vs 参考图，不达标回炉修复（最多 2 轮）
-        for round_no in range(2):
-            if self._visual_qc(image):
+        # 构建器路径已由 ReviseLoop 做过结构化质检，不再重复（也避免网络超时打断交付）
+        for round_no in range(0 if builder_ok else 2):
+            try:
+                if self._visual_qc(image):
+                    break
+            except Exception as e:  # noqa: 质检失败不阻断交付
+                self.memory.record(Step(index=89, goal="视觉质检异常"),
+                                   ToolResult(ok=False, content=repr(e)))
                 break
             any_failed = True
-            if builder_ok:  # 构建器产物不做 LLM 自由改写（会破坏比例/构图），只标记不合格
-                break
             fix = Step(index=90 + round_no, goal=(
                 "视觉质检不达标，根据参考图与当前渲染的差距修复角色外观："
                 "缺五官几何就补几何，颜色未分区就按面重新分配材质，"
