@@ -8,9 +8,11 @@ from blender_agent.core.types import ChatMessage
 
 
 class LLMClient:
-    def __init__(self, provider: ModelProvider):
+    def __init__(self, provider: ModelProvider, timeout: float = 90.0):
         self.provider = provider
-        self._client = OpenAI(base_url=provider.base_url, api_key=provider.api_key)
+        # 显式短超时：网关偶发挂起时，别让单次调用吞 10 分钟
+        self._client = OpenAI(base_url=provider.base_url, api_key=provider.api_key,
+                              timeout=timeout, max_retries=0)
 
     def chat(self, messages: list[ChatMessage], tools: list[dict] | None = None,
              max_retries: int = 3, response_format: dict | None = None) -> ChatMessage:

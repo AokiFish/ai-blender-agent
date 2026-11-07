@@ -134,17 +134,29 @@ class Agent:
                         f"确定性构建器 {name} 已产出完整角色资产；"
                         f"特征参数：{json.dumps(feats.to_params(), ensure_ascii=False)}"
                         if feats else f"确定性构建器 {name} 已产出完整角色资产")
-                    loop_out = loop.run(ref_image=image)
-                    self.memory.record(Step(index=-2, goal="write-run-compare-revise 修订循环"),
-                                       ToolResult(ok=True, content=(
-                                           f"评分序列 {loop_out['scores']}，"
-                                           f"最终 {loop_out['final_score']}，"
-                                           f"轨迹 {loop_out['trajectory']}")))
+                    try:
+                        loop_out = loop.run(ref_image=image)
+                    except Exception as e:  # noqa: 循环内任何异常都不该阻断交付
+                        loop_out = {"scores": [], "final_score": 0.0,
+                                    "verified": False, "trajectory": ""}
+                        self.memory.record(Step(index=-2, goal="修订循环异常"),
+                                           ToolResult(ok=False, content=repr(e)))
+                    else:
+                        self.memory.record(Step(index=-2, goal="write-run-compare-revise 修订循环"),
+                                           ToolResult(ok=True, content=(
+                                               f"评分序列 {loop_out['scores']}，"
+                                               f"最终 {loop_out['final_score']}，"
+                                               f"轨迹 {loop_out['trajectory']}")))
                     if loop_out["verified"] and loop_out["final_score"] < 5:
                         any_failed = True
 
         for step in steps:
-            res = self.executor.run_step(step, tools, history)
+            try:
+                res = self.executor.run_step(step, tools, history)
+            except Exception as e:  # noqa: 单步 LLM 超时不毁任务
+                any_failed = True
+                self.memory.record(step, ToolResult(ok=False, content=repr(e)))
+                continue
             history.append(ChatMessage(role="user", content=f"步骤结果：{res.content}"))
             self.memory.record(step, res)
             self.memory.maybe_checkpoint(self.provider,

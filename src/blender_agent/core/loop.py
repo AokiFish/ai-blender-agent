@@ -165,9 +165,13 @@ class ReviseLoop:
                 memory_lines.append(f"第{rnd}轮：诊断渲染失败，终止循环")
                 break
 
-            report = verify(self.llm, ref_image, main,
-                            memory="\n".join(memory_lines[-3:]),
-                            lessons=format_lessons(self.lessons))
+            try:
+                report = verify(self.llm, ref_image, main,
+                                memory="\n".join(memory_lines[-3:]),
+                                lessons=format_lessons(self.lessons))
+            except Exception as e:  # noqa: 网络/限速失败不该毁掉整个任务
+                memory_lines.append(f"第{rnd}轮：verifier 调用失败（{e!r}），终止循环")
+                break
             if is_parse_error(report):
                 # 拿不到可信评分就不要瞎改：止损比乱打补丁便宜
                 memory_lines.append(f"第{rnd}轮：verifier 输出不可解析，终止循环")
@@ -191,8 +195,12 @@ class ReviseLoop:
                                         memory="\n".join(memory_lines),
                                         lessons=format_lessons(self.lessons),
                                         plan_summary=self.plan_summary)
-            reply = self.llm.chat([ChatMessage(role="user", content=prompt,
-                                               images=([ref_image] if ref_image else []) + [main])])
+            try:
+                reply = self.llm.chat([ChatMessage(role="user", content=prompt,
+                                                   images=([ref_image] if ref_image else []) + [main])])
+            except Exception as e:  # noqa: 补丁生成失败 → 保留当前成果，不再重试
+                memory_lines.append(f"第{rnd}轮：补丁生成失败（{e!r}），终止循环")
+                break
             code = extract_code(getattr(reply, "content", "") or "")
             with open(os.path.join(tj, "codes", f"round{rnd}.py"),
                       "w", encoding="utf-8") as f:

@@ -102,6 +102,22 @@ def test_render_views_returns_paths(tmp_path):
     assert len(paths) == 3
 
 
+def test_llm_failure_inside_loop_does_not_raise(tmp_path):
+    """网络超时/限速：循环要止损返回，不能把异常抛给上层（否则交付都跑不了）。"""
+    loop = ReviseLoop(StubProvider(), str(tmp_path),
+                      lessons=Lessons(path=os.path.join(str(tmp_path), "l.json")),
+                      max_rounds=3, views_fn=_fake_views)
+
+    class BoomLLM:
+        def chat(self, *a, **k):
+            raise RuntimeError("Request timed out")
+
+    loop.llm = BoomLLM()
+    out = loop.run(ref_image=PNG)
+    assert out["scores"] == [] and out["verified"] is False
+    assert os.path.isfile(os.path.join(out["trajectory"], "scores.json"))
+
+
 def test_bad_verifier_output_stops_loop_without_patch(tmp_path):
     """Verifier 输出不可解析 → 不打补丁白烧一轮，直接止损。"""
     loop = ReviseLoop(StubProvider(), str(tmp_path),
