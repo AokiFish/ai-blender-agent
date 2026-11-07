@@ -1,0 +1,14 @@
+# 密钥与本地环境
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Agent 产出（二进制，不入版本库）
+*.blend
+workspace/
