@@ -13,10 +13,10 @@ class LLMClient:
         self._client = OpenAI(base_url=provider.base_url, api_key=provider.api_key)
 
     def chat(self, messages: list[ChatMessage], tools: list[dict] | None = None,
-             max_retries: int = 3) -> ChatMessage:
+             max_retries: int = 6) -> ChatMessage:
         payload = [self._to_oai(m) for m in messages]
         last_err = None
-        for _ in range(max_retries):
+        for attempt in range(max_retries):
             try:
                 kwargs = dict(model=self.provider.model,
                               messages=payload,
@@ -27,10 +27,11 @@ class LLMClient:
                     kwargs["tool_choice"] = "auto"
                 resp = self._client.chat.completions.create(**kwargs)
                 return self._from_oai(resp)
-            except Exception as e:  # noqa: 限速/网络抖动退避重试
+            except Exception as e:  # noqa: 限速/网络抖动退避重试（免费模型 429 常见，需长等待）
                 last_err = e
-                time.sleep(2)
-        raise RuntimeError(f"LLM 调用失败: {last_err}")
+                if attempt < max_retries - 1:
+                    time.sleep(min(5 * 2 ** attempt, 60))  # 5/10/20/40/60 秒退避
+        raise RuntimeError(f"LLM 调用失败（重试 {max_retries} 次）: {last_err}")
 
     def _to_oai(self, m: ChatMessage) -> dict:
         if m.images:  # 多模态：图片作为 image_url content part 传给 LLM
