@@ -23,7 +23,7 @@ class TalkingHead(Skill):
         ref = "参考上传图片" if has_image else "按描述"
         return [
             Step(index=0, goal=(
-                f"{ref}清理场景（删除旧角色与 .001 重复对象）并搭建角色基础形体："
+                f"{ref}建模：清理场景（删除旧角色与 .001 重复对象）并搭建角色基础形体："
                 "头部大球+吻部小球+身体，比例必须对照参考图；"
                 "完成后立即用 look 检查整体比例是否像参考图")),
             Step(index=1, goal=(
