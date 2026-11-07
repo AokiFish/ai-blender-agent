@@ -10,6 +10,7 @@ def _stub():
         "create_primitive": lambda a: "ok",
         "set_material": lambda a: "ok",
         "execute_blender_code": lambda a: "non_manifold_edges:0\nzero_area_faces:0\nmeshes_missing_material:0",
+        "look": lambda a: "viewport screenshot",
     })
 
 

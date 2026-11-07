@@ -11,6 +11,7 @@ def stub_provider():
         "save_blend": lambda a: f"saved {a.get('path')}",
         "export_fbx": lambda a: f"exported {a.get('path')}",
         "execute_python": lambda a: "non_manifold_edges:0\nzero_area_faces:0\nmeshes_missing_material:0",
+        "look": lambda a: "viewport screenshot",
     })
 
 

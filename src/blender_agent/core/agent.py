@@ -43,15 +43,35 @@ class Agent:
         provider = McpToolProvider(cfg.blender)
         return cls(llm, provider, cfg)
 
-    def _pick_skill_steps(self, goal: str) -> list[Step]:
+    def _pick_skill_steps(self, goal: str, has_image: bool = False) -> list[Step]:
         for s in self.skills:
             if s.accept(goal):
-                return s.build_steps(goal, {})
+                return s.build_steps(goal, {"has_image": has_image})
         return self.planner.plan(goal, scene=self._scene()).steps
+
+    def _look_screenshot(self):
+        try:
+            return self.provider.sync_call_tool("look", {})
+        except Exception:  # noqa: stub / 工具缺失
+            return None
+
+    def _visual_qc(self, ref_image: bytes | None) -> bool:
+        """把当前渲染与参考图喂给模型比对；不达标返回 False 触发修复轮。"""
+        look = self._look_screenshot()
+        if look is None or not look.images:
+            return True  # 无截图能力时跳过视觉质检
+        ask = ("第一张是参考图，第二张是当前 Blender 场景的渲染。"
+               "判断角色是否达到可交付水平，硬性标准："
+               "①能一眼认出是参考图中的角色；②有清晰可见的眼睛/鼻子/嘴几何；"
+               "③颜色按部位正确分区（不是通体一色）。"
+               "全部满足回复 PASS；否则列出缺失项（简短）。")
+        imgs = [ref_image] + look.images if ref_image else list(look.images)
+        reply = self.llm.chat([ChatMessage(role="user", content=ask, images=imgs)])
+        return "PASS" in (reply.content or "").upper()
 
     def run(self, goal: str, image: bytes | None = None) -> dict:
         os.makedirs(self.cfg.workspace, exist_ok=True)
-        steps = self._pick_skill_steps(goal)
+        steps = self._pick_skill_steps(goal, has_image=image is not None)
         history: list[ChatMessage] = []
         if image:  # 参考图存成文件，既能给 LLM 看，也能传给 generate_3d 的 image 参数
             ref_path = os.path.join(self.cfg.workspace, "reference.png")
@@ -76,6 +96,18 @@ class Agent:
                 any_failed = True
                 fix_step = Step(index=step.index, goal=f"修复：{'；'.join(report['issues'])}")
                 self.executor.run_step(fix_step, tools, history)
+        # 视觉质检闭环：渲染 vs 参考图，不达标回炉修复（最多 2 轮）
+        for round_no in range(2):
+            if self._visual_qc(image):
+                break
+            any_failed = True
+            fix = Step(index=90 + round_no, goal=(
+                "视觉质检不达标，根据参考图与当前渲染的差距修复角色外观："
+                "缺五官几何就补几何，颜色未分区就按面重新分配材质，"
+                "修完必须用 look 重新确认"))
+            res = self.executor.run_step(fix, tools, history)
+            history.append(ChatMessage(role="user", content=f"修复轮结果：{res.content}"))
+            self.memory.record(fix, res)
         # 交付：真实执行“保存工程 + 导出 fbx/glb”，交给 LLM 用
         # execute_blender_code 完成（真实 mcp-for-blender 没有独立的 save/export 工具）
         # 注意：Blender 进程 CWD 是其安装目录，必须传绝对路径
