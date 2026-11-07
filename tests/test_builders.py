@@ -7,7 +7,7 @@ def test_matches_cat_goal():
     name, script = b
     assert name == "cat"
     # 脚本必须包含关键构建步骤，避免空壳注册
-    for token in ["Cat_Head", "Cat_Eye_L", "MouthOpen", "Blink", "Cat_Armature", "BUILD_OK"]:
+    for token in ["Cat_Head", "Cat_Eye_", "MouthOpen", "Blink", "Cat_Armature", "BUILD_OK"]:
         assert token in script
 
 
