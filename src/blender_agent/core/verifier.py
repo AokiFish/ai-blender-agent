@@ -87,7 +87,23 @@ def verify(llm, ref_image: bytes | None, render_image: bytes,
     if is_parse_error(report):
         report = VerifierReport.from_json(
             _ask(prompt + "\n\n上次输出无法解析。只输出 JSON 对象，不要任何解释。"))
+    if report.issues and all(not is_fixable(i) for i in report.issues):
+        # 问题全是几何/拓扑/毛发/场景级别：打材质补丁修不了，别烧轮次
+        report.should_continue = False
+        report.summary += "（需重建几何，补丁无法解决，已止损）"
     return report
+
+
+# 补丁只能改材质/变换/灯光/相机；命中这些词的问题视为"改不动"
+_UNFIXABLE = ("毛发", "fur_texture", "hair particle", "粒子", "topology", "拓扑",
+              "体型", "body shape", "背景", "background", "重建", "reconstruct",
+              "写实", "photoreal", "细分", "subdivision")
+
+
+def is_fixable(issue: dict) -> bool:
+    text = " ".join(str(issue.get(k, "")) for k in
+                    ("feature", "expected", "actual", "fix_hint")).lower()
+    return not any(k.lower() in text for k in _UNFIXABLE)
 
 
 def is_parse_error(r: VerifierReport) -> bool:

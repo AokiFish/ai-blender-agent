@@ -182,6 +182,9 @@ class ReviseLoop:
             shutil.copyfile(paths[0], os.path.join(tj, "renders", f"round{rnd}.png"))
 
             if report.score >= self.threshold or not report.should_continue:
+                # 即使止损，也把"缺什么"沉淀成跨运行教训
+                for issue in report.issues:
+                    self.lessons.add(issue.get("feature", ""), issue.get("fix_hint", ""))
                 break
 
             prompt = build_patch_prompt(report.issues,

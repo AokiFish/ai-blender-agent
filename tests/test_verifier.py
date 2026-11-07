@@ -41,6 +41,26 @@ def test_verify_without_reference_image():
     assert llm.calls[0][0].images == [b"render"]
 
 
+def test_unfixable_issues_stop_the_loop():
+    """全是不没法打补丁的问题（毛发/体型/场景）→ 不该继续烧轮次。"""
+    reply = ('{"score": 3, "should_continue": true, "summary": "差距大", "issues": ['
+             '{"feature": "fur_texture", "expected": "蓬松毛发", "actual": "光滑", "severity": "high",'
+             ' "fix_hint": "加毛发粒子"},'
+             '{"feature": "pose_and_body_shape", "expected": "真实体型", "actual": "两个球",'
+             ' "severity": "high", "fix_hint": "调整身体网格"}]}')
+    llm = FakeLLM([reply])
+    r = verify(llm, b"ref", b"render")
+    assert r.should_continue is False and "止损" in r.summary
+
+
+def test_fixable_issues_keep_loop_running():
+    reply = ('{"score": 6, "should_continue": true, "summary": "偏色", "issues": ['
+             '{"feature": "fur_color", "expected": "橘", "actual": "灰", "severity": "medium",'
+             ' "fix_hint": "调 Base Color"}]}')
+    r = verify(FakeLLM([reply]), b"ref", b"render")
+    assert r.should_continue is True
+
+
 # ---------- lessons ----------
 def test_lessons_add_dedup_and_cap():
     ls = Lessons(cap=3)
