@@ -26,15 +26,19 @@
 详见实现计划 `docs/superpowers/plans/2026-11-07-ai-blender-agent.md`（含 18 个任务化步骤与测试）。
 
 ```bash
-# 1. 安装依赖（建议隔离环境）
-python -m venv .venv && .venv/Scripts/activate
-pip install -e .
+# 1. 安装依赖（隔离环境）
+python -m venv .venv && .venv\Scripts\activate && pip install -e .[test]
 
-# 2. 配置 Blender MCP 后端（默认 ahujasid/mcp-for-blender）
-#    在 Blender 内安装并启用 MCP 插件，启动 Server（stdio 默认 uvx 拉起）
+# 2. 安装 Blender 插件（已在本地执行过，文件已就位）
+#    uvx mcp-for-blender install-addon
+#    → 已写入 C:\Users\Administrator\AppData\Roaming\Blender Foundation\Blender\3.6\scripts\addons\blender_mcp.py
+#    你只需在 Blender 里【启用 + 启动 Server】（GUI 步骤，必须做）：
+#      a. 打开 Blender → Edit → Preferences → Add-ons → 搜 “MCP for Blender” → 勾选启用
+#      b. 3D 视图按 N → 侧栏 “MCP for Blender” → 点【Start MCP Server】（开 6688 端口）
+#    ※ Agent 会用 uvx mcp-for-blender 自动拉起 MCP 服务端并连上这个端口，前提是上面的 Server 已启动。
 
-# 3. 填入模型密钥
-cp .env.example .env        # 编辑 .env，填入 BLENDER_AGENT_API_KEY 与模型
+# 3. 填入模型密钥（你已填 OpenRouter）
+cp .env.example .env        # 编辑 .env：BLENDER_AGENT_API_KEY 与 BLENDER_AGENT_MODEL
                           # 默认 google/gemma-4-26b-it:free（OpenRouter 免费、多模态）
 
 # 4. 运行
@@ -50,11 +54,14 @@ python -m blender_agent.cli check
 ## 测试
 
 ```bash
-pip install pytest
-pytest tests/ -q        # 21 passed, 1 skipped（skip 为需真实 Blender 的 live 用例）
+pytest tests/ -q        # 22 passed, 1 skipped（skip 为需真实 Blender 的 live 用例）
 ```
 
 无 Blender 也能跑完全部核心逻辑（Stub + FakeLLM）。
+
+## 真实工具名（mcp-for-blender 实际暴露，代码只用这些）
+
+`execute_blender_code`（跑 bpy 代码，保存/导出全靠它）、`look`（视口/相机看结果，返回图）、`get_scene_info`（场景摘要）、`generate_3d`（支持 `image` 参数，图生3D）、`search_assets` / `import_asset`、`get_addon_status` / `disable_telemetry` / `record_trajectory_feedback`。**注意：没有独立的 save/export/fbx/glb 工具**，保存 `.blend` 和导出 FBX/GLB 都由 LLM 通过 `execute_blender_code` 写 bpy 代码完成。
 
 ## 许可
 
