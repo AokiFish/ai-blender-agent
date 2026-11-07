@@ -1,5 +1,5 @@
 from blender_agent.core.llm import LLMClient
-from blender_agent.core.tool_provider import ToolProvider
+from blender_agent.core.tool_provider import ToolProvider, resolve_code_tool
 from blender_agent.core.types import ChatMessage, ToolResult
 
 DETERMINISTIC_SCRIPT = """
@@ -17,10 +17,17 @@ print(f"meshes_missing_material:{mt}")
 class Observer:
     def __init__(self, provider: ToolProvider, vlm: LLMClient | None = None):
         self.provider, self.vlm = provider, vlm
+        self._code_tool: str | None = None
+
+    def _code_tool_name(self) -> str:
+        if self._code_tool is None:
+            self._code_tool = resolve_code_tool(self.provider)
+        return self._code_tool
 
     def check(self, goal: str, step_result: ToolResult | None) -> dict:
         issues = []
-        res = self.provider.sync_call_tool("execute_python", {"code": DETERMINISTIC_SCRIPT})
+        res = self.provider.sync_call_tool(self._code_tool_name(),
+                                          {"code": DETERMINISTIC_SCRIPT})
         for line in res.content.splitlines():
             if line.startswith("non_manifold_edges:") and int(line.split(":")[1]) > 0:
                 issues.append(f"存在 {line.split(':')[1]} 条非流形边")
@@ -29,7 +36,7 @@ class Observer:
             if line.startswith("meshes_missing_material:") and int(line.split(":")[1]) > 0:
                 issues.append(f"有 {line.split(':')[1]} 个网格缺材质")
         images = step_result.images if step_result else []
-        if self.vlm and images:  # 可选：把截图交给视觉模型复核
+        if self.vlm and images:
             v = self.vlm.chat([ChatMessage(
                 role="user",
                 content=f"这张 3D 视图是否符合目标：{goal}？只列问题。")],

@@ -12,28 +12,27 @@ class FileManagement(Skill):
         g = goal.lower()
         return any(k in g for k in ["保存", "导出", "save", "export", ".blend", "fbx", "glb"])
 
-    def build_steps(self, goal: str, ctx: dict) -> list[Step]:
+    def build_steps(self, goal: str, ctx: dict | None = None) -> list[Step]:
+        ctx = ctx or {}
         workspace = ctx.get("workspace", ".")
         base = ctx.get("base_name", "result")
-        steps = [Step(index=0, goal=f"保存工程到 {workspace}/{base}.blend")]
+        steps = [Step(index=0,
+                     goal=f"用 execute_blender_code 把工程保存到 {workspace}/{base}.blend")]
         g = goal.lower()
         if "fbx" in g or "导出" in goal:
-            steps.append(Step(index=len(steps), goal=f"导出 {base}.fbx"))
+            steps.append(Step(index=len(steps),
+                             goal=f"用 execute_blender_code 导出 FBX 到 {workspace}/{base}.fbx"))
         if "glb" in g or "导出" in goal:
-            steps.append(Step(index=len(steps), goal=f"导出 {base}.glb"))
+            steps.append(Step(index=len(steps),
+                             goal=f"用 execute_blender_code 导出 GLB 到 {workspace}/{base}.glb"))
         return steps
 
-    def run(self, goal: str, workspace: str = ".", base_name: str = "result") -> dict:
-        blend = f"{workspace}/{base_name}.blend"
-        self.provider.sync_call_tool("save_blend", {"path": blend})
-        deliverables = [blend]
+    @staticmethod
+    def expected_paths(goal: str, workspace: str = ".", base: str = "result") -> list[str]:
+        paths = [f"{workspace}/{base}.blend"]
         g = goal.lower()
         if "fbx" in g or "导出" in goal:
-            fbx = f"{workspace}/{base_name}.fbx"
-            self.provider.sync_call_tool("export_fbx", {"path": fbx})
-            deliverables.append(fbx)
+            paths.append(f"{workspace}/{base}.fbx")
         if "glb" in g or "导出" in goal:
-            glb = f"{workspace}/{base_name}.glb"
-            self.provider.sync_call_tool("export_glb", {"path": glb})
-            deliverables.append(glb)
-        return {"deliverables": deliverables, "blend": blend}
+            paths.append(f"{workspace}/{base}.glb")
+        return paths

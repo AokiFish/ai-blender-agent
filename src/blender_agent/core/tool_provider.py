@@ -48,3 +48,18 @@ def discovered_tools_to_openai(tools: list[AgentTool]) -> list[dict]:
             "parameters": t.input_schema,
         },
     } for t in tools]
+
+
+# mcp-for-blender 真实用 execute_blender_code 执行任意 bpy 代码；
+# Stub 测试桩里叫 execute_python。按此顺序匹配真实工具名。
+CODE_TOOL_CANDIDATES = ["execute_blender_code", "execute_code", "run_code", "execute_python"]
+
+
+def resolve_code_tool(provider) -> str:
+    """从 provider 暴露的工具里挑一个“执行 bpy 代码”的工具，找不到回退默认值。"""
+    name = "execute_blender_code"
+    if hasattr(provider, "sync_list_tools"):
+        for t in provider.sync_list_tools():
+            if t.name in CODE_TOOL_CANDIDATES:
+                return t.name
+    return name

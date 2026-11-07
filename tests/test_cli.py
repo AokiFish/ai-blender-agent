@@ -4,15 +4,17 @@ from blender_agent.core.tool_provider import StubToolProvider
 from blender_agent.core.types import ChatMessage
 
 
-def test_agent_runs_full_loop():
-    stub = StubToolProvider({
+def _stub():
+    return StubToolProvider({
         "get_scene_info": lambda a: "Objects:[]",
         "create_primitive": lambda a: "ok",
         "set_material": lambda a: "ok",
-        "save_blend": lambda a: "saved",
-        "export_fbx": lambda a: "exp",
-        "execute_python": lambda a: "non_manifold_edges:0\nzero_area_faces:0\nmeshes_missing_material:0",
+        "execute_blender_code": lambda a: "non_manifold_edges:0\nzero_area_faces:0\nmeshes_missing_material:0",
     })
+
+
+def test_agent_runs_full_loop():
+    stub = _stub()
     fake = FakeLLM(responses=[
         ChatMessage(role="assistant", content='{"steps":[{"goal":"建模"},{"goal":"材质"}]}'),
         ChatMessage(role="assistant", tool_calls=[{"id": "c", "type": "function",
@@ -26,16 +28,11 @@ def test_agent_runs_full_loop():
     out = agent.run("给 Mimi 做角色")
     assert out["passed"] is True
     assert len(out["steps_log"]) >= 2
+    assert any(d.endswith(".blend") for d in out["deliverables"])
 
 
 def test_agent_runs_with_image():
-    stub = StubToolProvider({
-        "get_scene_info": lambda a: "Objects:[]",
-        "create_primitive": lambda a: "ok",
-        "save_blend": lambda a: "saved",
-        "export_fbx": lambda a: "exp",
-        "execute_python": lambda a: "non_manifold_edges:0\nzero_area_faces:0\nmeshes_missing_material:0",
-    })
+    stub = _stub()
     fake = FakeLLM(responses=[
         ChatMessage(role="assistant", content='{"steps":[{"goal":"建模"}]}'),
         ChatMessage(role="assistant", tool_calls=[{"id": "c", "type": "function",

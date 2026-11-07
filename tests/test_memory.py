@@ -5,7 +5,8 @@ from blender_agent.core.types import Step, ToolResult
 
 def test_checkpoint_called_every_n_steps():
     saves = []
-    stub = StubToolProvider({"save_blend": lambda a: saves.append(a["path"])})
+    # mcp-for-blender 用 execute_blender_code 保存，没有独立的 save_blend 工具
+    stub = StubToolProvider({"execute_blender_code": lambda a: saves.append(a["code"])})
     mem = Memory(checkpoint_every=2)
     for i in range(4):
         mem.record(Step(index=i, goal=f"g{i}"), ToolResult(ok=True))

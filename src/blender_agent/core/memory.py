@@ -1,4 +1,4 @@
-from blender_agent.core.tool_provider import ToolProvider
+from blender_agent.core.tool_provider import ToolProvider, resolve_code_tool
 from blender_agent.core.types import Step, ToolResult
 
 
@@ -15,7 +15,10 @@ class Memory:
 
     def maybe_checkpoint(self, provider: ToolProvider, path: str) -> bool:
         if self._count % self.checkpoint_every == 0:
-            provider.sync_call_tool("save_blend", {"path": path})
+            # mcp-for-blender 没有独立 save 工具，用 execute_blender_code 保存
+            tool = resolve_code_tool(provider)
+            provider.sync_call_tool(tool, {
+                "code": f"import bpy\nbpy.ops.wm.save_as_mainfile(filepath={path!r})"})
             return True
         return False
 

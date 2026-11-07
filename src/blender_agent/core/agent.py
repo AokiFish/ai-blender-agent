@@ -53,9 +53,15 @@ class Agent:
         os.makedirs(self.cfg.workspace, exist_ok=True)
         steps = self._pick_skill_steps(goal)
         history: list[ChatMessage] = []
-        if image:  # 参考图作为多模态上下文注入，后续每步都能看到
-            history.append(ChatMessage(role="user",
-                            content="参考图（用于按图建模）：", images=[image]))
+        if image:  # 参考图存成文件，既能给 LLM 看，也能传给 generate_3d 的 image 参数
+            ref_path = os.path.join(self.cfg.workspace, "reference.png")
+            with open(ref_path, "wb") as f:
+                f.write(image)
+            history.append(ChatMessage(
+                role="user",
+                content=f"参考图已保存到 {ref_path}，可用 generate_3d 的 image 参数传入"
+                        f"该路径进行图生3D建模；也可直接作为多模态参考。",
+                images=[image]))
         tools = (self.provider.sync_list_tools()
                  if hasattr(self.provider, "sync_list_tools") else [])
         any_failed = False
@@ -70,7 +76,11 @@ class Agent:
                 any_failed = True
                 fix_step = Step(index=step.index, goal=f"修复：{'；'.join(report['issues'])}")
                 self.executor.run_step(fix_step, tools, history)
-        deliverables = self.files.run("导出 fbx glb", self.cfg.workspace, "result")["deliverables"]
+        # 交付：把“保存工程 + 导出 fbx/glb”作为最后步骤，交给 LLM 用
+        # execute_blender_code 完成（真实 mcp-for-blender 没有独立的 save/export 工具）
+        steps += self.files.build_steps("导出 fbx glb",
+                                        {"workspace": self.cfg.workspace, "base_name": "result"})
+        deliverables = FileManagement.expected_paths("导出 fbx glb", self.cfg.workspace, "result")
         return {"goal": goal, "steps_log": self.memory.log,
                 "deliverables": deliverables, "passed": not any_failed}
 
