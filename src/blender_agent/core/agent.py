@@ -78,15 +78,17 @@ class Agent:
                 self.executor.run_step(fix_step, tools, history)
         # 交付：真实执行“保存工程 + 导出 fbx/glb”，交给 LLM 用
         # execute_blender_code 完成（真实 mcp-for-blender 没有独立的 save/export 工具）
-        deliver_steps = self.files.build_steps("导出 fbx glb",
-                                               {"workspace": self.cfg.workspace, "base_name": "result"})
+        # 注意：Blender 进程 CWD 是其安装目录，必须传绝对路径
+        abs_ws = os.path.abspath(self.cfg.workspace)
+        deliver_steps = self.files.build_steps(
+            "导出 fbx glb", {"workspace": abs_ws, "base_name": "result"})
         for step in deliver_steps:
             res = self.executor.run_step(step, tools, history)
             history.append(ChatMessage(role="user", content=f"步骤结果：{res.content}"))
             self.memory.record(step, res)
             if not res.ok:
                 any_failed = True
-        deliverables = FileManagement.expected_paths("导出 fbx glb", self.cfg.workspace, "result")
+        deliverables = FileManagement.expected_paths("导出 fbx glb", abs_ws, "result")
         return {"goal": goal, "steps_log": self.memory.log,
                 "deliverables": deliverables, "passed": not any_failed}
 
