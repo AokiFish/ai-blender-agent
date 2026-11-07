@@ -46,7 +46,7 @@ class Agent:
     def _pick_skill_steps(self, goal: str) -> list[Step]:
         for s in self.skills:
             if s.accept(goal):
-                return s.build_steps(goal)
+                return s.build_steps(goal, {})
         return self.planner.plan(goal, scene=self._scene()).steps
 
     def run(self, goal: str, image: bytes | None = None) -> dict:
