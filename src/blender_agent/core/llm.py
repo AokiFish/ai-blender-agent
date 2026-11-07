@@ -13,7 +13,7 @@ class LLMClient:
         self._client = OpenAI(base_url=provider.base_url, api_key=provider.api_key)
 
     def chat(self, messages: list[ChatMessage], tools: list[dict] | None = None,
-             max_retries: int = 3) -> ChatMessage:
+             max_retries: int = 3, response_format: dict | None = None) -> ChatMessage:
         payload = [self._to_oai(m) for m in messages]
         last_err = None
         for attempt in range(max_retries):
@@ -25,6 +25,8 @@ class LLMClient:
                 if tools:
                     kwargs["tools"] = tools
                     kwargs["tool_choice"] = "auto"
+                if response_format:
+                    kwargs["response_format"] = response_format
                 resp = self._client.chat.completions.create(**kwargs)
                 return self._from_oai(resp)
             except Exception as e:  # noqa: 限速/网络抖动退避重试；退避上限压短，避免单调用挂几分钟
@@ -68,7 +70,7 @@ class FakeLLM:
         self._q = list(responses)
         self.calls = []
 
-    def chat(self, messages, tools=None, max_retries=3) -> ChatMessage:
+    def chat(self, messages, tools=None, max_retries=3, response_format=None) -> ChatMessage:
         self.calls.append(messages)
         if self._q:
             return self._q.pop(0)

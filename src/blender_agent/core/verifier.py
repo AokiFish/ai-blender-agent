@@ -62,7 +62,11 @@ class VerifierReport:
 
 def verify(llm, ref_image: bytes | None, render_image: bytes,
            memory: str = "", lessons: str = "") -> VerifierReport:
-    """渲染图（必选）与参考图（可选）喂给 VLM，拿结构化报告。"""
+    """渲染图（必选）与参考图（可选）喂给 VLM，拿结构化报告。
+
+    agnes 等模型偶尔返回空内容：先请求 JSON 模式，不支持则退普通调用；
+    解析失败再补一次"只输出 JSON"的纠错。
+    """
     from blender_agent.core.types import ChatMessage
     ctx = ""
     if memory:
@@ -70,6 +74,21 @@ def verify(llm, ref_image: bytes | None, render_image: bytes,
     if lessons:
         ctx += f"\n\n【往期教训（优先避免）】\n{lessons}"
     images = ([ref_image] if ref_image else []) + [render_image]
-    reply = llm.chat([ChatMessage(role="user", content=VERIFY_PROMPT + ctx,
-                                  images=images)])
-    return VerifierReport.from_json(getattr(reply, "content", "") or "")
+    prompt = VERIFY_PROMPT + ctx
+
+    def _ask(text: str) -> str:
+        msg = ChatMessage(role="user", content=text, images=images)
+        try:
+            return llm.chat([msg], response_format={"type": "json_object"}).content or ""
+        except Exception:  # 服务商不支持 json 模式
+            return llm.chat([msg]).content or ""
+
+    report = VerifierReport.from_json(_ask(prompt))
+    if is_parse_error(report):
+        report = VerifierReport.from_json(
+            _ask(prompt + "\n\n上次输出无法解析。只输出 JSON 对象，不要任何解释。"))
+    return report
+
+
+def is_parse_error(r: VerifierReport) -> bool:
+    return any(i.get("feature") == "parse_error" for i in r.issues)

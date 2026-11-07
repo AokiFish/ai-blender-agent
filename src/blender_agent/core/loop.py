@@ -7,11 +7,12 @@
 """
 import json
 import os
+import re
 import shutil
 import time
 
 from blender_agent.core.types import ChatMessage
-from blender_agent.core.verifier import verify
+from blender_agent.core.verifier import verify, is_parse_error
 from blender_agent.core.lessons import Lessons, format_lessons
 
 MAX_ROUNDS = 3
@@ -102,6 +103,12 @@ def build_patch_prompt(issues: list[dict], memory: str, lessons: str,
         lessons=lessons or "（无）", constraints=PATCH_CONSTRAINTS)
 
 
+def extract_code(text: str) -> str:
+    """模型常把代码包在 ```python 围栏里；剥出来再执行。"""
+    m = re.search(r"```(?:python)?\s*(.*?)```", text, re.DOTALL)
+    return (m.group(1) if m else text).strip()
+
+
 def render_views(provider, workspace: str, ref_bytes: bytes | None = None) -> list[str]:
     """执行诊断渲染脚本，返回三张视角图的路径（可能不存在=渲染失败）。"""
     script = RENDER_VIEWS_SCRIPT.replace("__WS__", os.path.abspath(workspace))
@@ -161,11 +168,11 @@ class ReviseLoop:
             report = verify(self.llm, ref_image, main,
                             memory="\n".join(memory_lines[-3:]),
                             lessons=format_lessons(self.lessons))
-            if not any(i.get("feature") == "parse_error" for i in report.issues):
-                verified = True
-            else:
-                memory_lines.append(f"第{rnd}轮：verifier 输出不可解析，跳过本轮")
-                continue
+            if is_parse_error(report):
+                # 拿不到可信评分就不要瞎改：止损比乱打补丁便宜
+                memory_lines.append(f"第{rnd}轮：verifier 输出不可解析，终止循环")
+                break
+            verified = True
             scores.append(report.score)
             final_score = report.score
             with open(os.path.join(tj, "verifier", f"round{rnd}.json"),
@@ -183,10 +190,13 @@ class ReviseLoop:
                                         plan_summary=self.plan_summary)
             reply = self.llm.chat([ChatMessage(role="user", content=prompt,
                                                images=([ref_image] if ref_image else []) + [main])])
-            code = getattr(reply, "content", "") or ""
+            code = extract_code(getattr(reply, "content", "") or "")
             with open(os.path.join(tj, "codes", f"round{rnd}.py"),
                       "w", encoding="utf-8") as f:
                 f.write(code)
+            if not code.strip():
+                memory_lines.append(f"第{rnd}轮：模型未产出代码，终止循环")
+                break
             res = self.provider.sync_call_tool("execute_blender_code", {"code": code})
             memory_lines.append(
                 f"第{rnd}轮：{report.to_memory(rnd)}；补丁{'已执行' if res.ok else '执行失败'}")

@@ -8,7 +8,7 @@ class FakeLLM:
         self.replies = list(replies)
         self.calls = []
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, response_format=None, **kw):
         self.calls.append(messages)
         return type("R", (), {"content": self.replies.pop(0)})()
 

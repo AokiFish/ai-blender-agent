@@ -26,7 +26,7 @@ class SeqLLM:
         self.scores = list(verifier_scores)
         self.patch_prompts = []
 
-    def chat(self, messages, tools=None):
+    def chat(self, messages, tools=None, response_format=None, **kw):
         content = messages[0].content
         if "只输出 JSON" in content:  # verifier 提示词特征
             s = self.scores.pop(0)
@@ -100,3 +100,16 @@ def test_render_views_returns_paths(tmp_path):
             return ToolResult(ok=True, content="RENDER_VIEWS_OK front=/a.png")
     paths = render_views(P(), str(tmp_path))
     assert len(paths) == 3
+
+
+def test_bad_verifier_output_stops_loop_without_patch(tmp_path):
+    """Verifier 输出不可解析 → 不打补丁白烧一轮，直接止损。"""
+    loop = ReviseLoop(StubProvider(), str(tmp_path),
+                      lessons=Lessons(path=os.path.join(str(tmp_path), "l.json")),
+                      max_rounds=3, views_fn=_fake_views)
+    llm = SeqLLM(verifier_scores=[])  # 走 FakeLLM 式空回复
+    llm.chat = lambda messages, **kw: type("R", (), {"content": "这不是 JSON"})()
+    loop.llm = llm
+    out = loop.run(ref_image=PNG)
+    assert out["scores"] == [] and out["verified"] is False
+    assert not os.path.exists(os.path.join(out["trajectory"], "codes", "round1.py"))
