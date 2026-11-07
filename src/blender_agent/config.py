@@ -1,5 +1,4 @@
 from enum import Enum
-from functools import lru_cache
 
 from pydantic import BaseModel, Field
 import os
@@ -35,7 +34,6 @@ class AgentConfig(BaseModel):
     max_steps: int = 40
 
 
-@lru_cache
 def load_config() -> AgentConfig:
     p = ModelProvider(
         base_url=os.getenv("BLENDER_AGENT_BASE_URL", ModelProvider().base_url),
