@@ -76,10 +76,16 @@ class Agent:
                 any_failed = True
                 fix_step = Step(index=step.index, goal=f"修复：{'；'.join(report['issues'])}")
                 self.executor.run_step(fix_step, tools, history)
-        # 交付：把“保存工程 + 导出 fbx/glb”作为最后步骤，交给 LLM 用
+        # 交付：真实执行“保存工程 + 导出 fbx/glb”，交给 LLM 用
         # execute_blender_code 完成（真实 mcp-for-blender 没有独立的 save/export 工具）
-        steps += self.files.build_steps("导出 fbx glb",
-                                        {"workspace": self.cfg.workspace, "base_name": "result"})
+        deliver_steps = self.files.build_steps("导出 fbx glb",
+                                               {"workspace": self.cfg.workspace, "base_name": "result"})
+        for step in deliver_steps:
+            res = self.executor.run_step(step, tools, history)
+            history.append(ChatMessage(role="user", content=f"步骤结果：{res.content}"))
+            self.memory.record(step, res)
+            if not res.ok:
+                any_failed = True
         deliverables = FileManagement.expected_paths("导出 fbx glb", self.cfg.workspace, "result")
         return {"goal": goal, "steps_log": self.memory.log,
                 "deliverables": deliverables, "passed": not any_failed}
