@@ -21,6 +21,45 @@ obj = meshes[0]
 me = obj.data
 print(f"IMPORTED faces={len(me.polygons)} verts={len(me.vertices)}")
 
+# ---- 清理重建伪影：删掉细长/极小的孤立碎块（胡须针、悬浮毛球） ----
+import bmesh
+
+bm = bmesh.new()
+bm.from_mesh(me)
+bm.faces.ensure_lookup_table()
+seen: set[int] = set()
+islands: list[list] = []
+for f in bm.faces:
+    if f.index in seen:
+        continue
+    stack, comp = [f], []
+    seen.add(f.index)
+    while stack:
+        cur = stack.pop()
+        comp.append(cur)
+        for e in cur.edges:
+            for nf in e.link_faces:
+                if nf.index not in seen:
+                    seen.add(nf.index)
+                    stack.append(nf)
+    islands.append(comp)
+islands.sort(key=len, reverse=True)
+total_f = len(bm.faces)
+to_del = []
+for comp in islands[1:]:  # 保留最大主体
+    if len(comp) >= total_f * 0.003:
+        continue
+    pts = np.array([[v.co.x, v.co.y, v.co.z] for f in comp for v in f.verts])
+    ext = pts.max(axis=0) - pts.min(axis=0)
+    if ext.min() < 0.035:  # 细长 = 胡须针
+        to_del.extend(comp)
+if to_del:
+    bmesh.ops.delete(bm, geom=to_del, context="FACES")
+bm.to_mesh(me)
+bm.free()
+me.update()
+print(f"CLEANED islands={len(islands)} removed_faces={len(to_del)} faces_now={len(me.polygons)}")
+
 # ---- 顶点世界坐标 ----
 n = len(me.vertices)
 co = np.empty(n * 3, dtype=np.float64)
@@ -110,7 +149,7 @@ cam = bpy.data.objects.new("Cam", cam_data)
 scn.collection.objects.link(cam)
 scn.camera = cam
 
-dist = size * 1.9
+dist = size * 2.4
 for name, off in {"front": (0, -dist, 0.05 * size), "side": (dist, 0, 0.05 * size),
                   "q45": (dist * 0.7, -dist * 0.7, 0.1 * size)}.items():
     cam.location = center + Vector(off)
