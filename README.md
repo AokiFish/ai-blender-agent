@@ -26,12 +26,35 @@
 详见实现计划 `docs/superpowers/plans/2026-11-07-ai-blender-agent.md`（含 18 个任务化步骤与测试）。
 
 ```bash
-uv sync                                   # 安装依赖
-uvx mcp-for-blender setup                 # 装 Blender 插件 + 配置 MCP 客户端
-cp .env.example .env && # 填入 BLENDER_AGENT_API_KEY 与模型
+# 1. 安装依赖（建议隔离环境）
+python -m venv .venv && .venv/Scripts/activate
+pip install -e .
+
+# 2. 配置 Blender MCP 后端（默认 ahujasid/mcp-for-blender）
+#    在 Blender 内安装并启用 MCP 插件，启动 Server（stdio 默认 uvx 拉起）
+
+# 3. 填入模型密钥
+cp .env.example .env        # 编辑 .env，填入 BLENDER_AGENT_API_KEY 与模型
+                          # 默认 google/gemma-4-26b-it:free（OpenRouter 免费、多模态）
+
+# 4. 运行
 python -m blender_agent.cli run "给 Mimi 制作一个完整的 3D 角色，包含模型、材质、骨骼、面部表情控制器，以及基础走路动画"
 python -m blender_agent.cli run "参考猫咪图片做口播角色，含独立嘴/眼控制器和可换贴图" --image cat.png
+
+# 仅做场景自检
+python -m blender_agent.cli check
 ```
+
+> 也可换 Agnes 等任何 OpenAI 兼容端点：把 `.env` 里的 `BLENDER_AGENT_BASE_URL`、`BLENDER_AGENT_API_KEY`、`BLENDER_AGENT_MODEL` 改掉即可，无需改代码。
+
+## 测试
+
+```bash
+pip install pytest
+pytest tests/ -q        # 21 passed, 1 skipped（skip 为需真实 Blender 的 live 用例）
+```
+
+无 Blender 也能跑完全部核心逻辑（Stub + FakeLLM）。
 
 ## 许可
 
