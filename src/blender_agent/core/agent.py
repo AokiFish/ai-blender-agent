@@ -168,18 +168,22 @@ class Agent:
             res = self.executor.run_step(fix, tools, history)
             history.append(ChatMessage(role="user", content=f"修复轮结果：{res.content}"))
             self.memory.record(fix, res)
-        # 交付：真实执行“保存工程 + 导出 fbx/glb”，交给 LLM 用
-        # execute_blender_code 完成（真实 mcp-for-blender 没有独立的 save/export 工具）
-        # 注意：Blender 进程 CWD 是其安装目录，必须传绝对路径
+        # 交付：保存工程 + 导出 fbx/glb 是确定性操作，直接用固定脚本一次执行，
+        # 不再让 LLM 生成代码（实测 5 个 LLM 步骤要 10 分钟）。失败才回退到 LLM。
         abs_ws = os.path.abspath(self.cfg.workspace)
-        deliver_steps = self.files.build_steps(
-            "导出 fbx glb", {"workspace": abs_ws, "base_name": "result"})
-        for step in deliver_steps:
-            res = self.executor.run_step(step, tools, history)
-            history.append(ChatMessage(role="user", content=f"步骤结果：{res.content}"))
-            self.memory.record(step, res)
-            if not res.ok:
-                any_failed = True
+        code = FileManagement.deliver_script(abs_ws, "result")
+        dres = self.provider.sync_call_tool("execute_blender_code", {"code": code})
+        self.memory.record(Step(index=95, goal="确定性交付：保存/导出"), dres)
+        if not dres.ok:
+            any_failed = True
+            deliver_steps = self.files.build_steps(
+                "导出 fbx glb", {"workspace": abs_ws, "base_name": "result"})
+            for step in deliver_steps:
+                res = self.executor.run_step(step, tools, history)
+                history.append(ChatMessage(role="user", content=f"步骤结果：{res.content}"))
+                self.memory.record(step, res)
+                if not res.ok:
+                    any_failed = True
         deliverables = FileManagement.expected_paths("导出 fbx glb", abs_ws, "result")
         return {"goal": goal, "steps_log": self.memory.log,
                 "deliverables": deliverables, "passed": not any_failed}

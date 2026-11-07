@@ -2,11 +2,32 @@ from blender_agent.skills.base import Skill
 from blender_agent.core.types import Step
 
 
+DELIVER_SCRIPT = r'''
+import bpy, os
+WS = r"__WS__"
+BASE = "__BASE__"
+os.makedirs(WS, exist_ok=True)
+blend = os.path.join(WS, BASE + ".blend")
+bpy.ops.wm.save_as_mainfile(filepath=blend)
+print("SAVED", blend)
+bpy.ops.export_scene.fbx(filepath=os.path.join(WS, BASE + ".fbx"), use_selection=False)
+print("EXPORTED_FBX")
+bpy.ops.export_scene.gltf(filepath=os.path.join(WS, BASE + ".glb"), export_format='GLB')
+print("EXPORTED_GLB")
+print("DELIVER_OK")
+'''
+
+
 class FileManagement(Skill):
     name = "file_management"
 
     def __init__(self, provider):
         self.provider = provider
+
+    @staticmethod
+    def deliver_script(workspace: str, base: str = "result") -> str:
+        """保存工程 + 导出 FBX/GLB 的确定性脚本（一次调用完成，不必问模型）。"""
+        return DELIVER_SCRIPT.replace("__WS__", workspace).replace("__BASE__", base)
 
     def accept(self, goal: str) -> bool:
         g = goal.lower()

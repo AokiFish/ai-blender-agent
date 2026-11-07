@@ -68,8 +68,9 @@ def test_builder_followed_by_verifier_loop_only(tmp_path):
     agent = Agent(llm, provider, cfg)
     agent.cfg.workspace = str(tmp_path)
     agent.run("参考图片制作猫咪口播角色", image=b"fakejpeg")
-    assert len(recorded) == 2  # 构建脚本 + 诊断渲染，verifier 9 分即停，无补丁
+    assert len(recorded) == 3  # 构建脚本 + 诊断渲染 + 确定性交付脚本（无 LLM 补丁）
     assert "DIAG_VIEW" in recorded[1]
+    assert "DELIVER_OK" in recorded[2]
 
 
 def test_loop_writes_trajectory_and_lessons(tmp_path):
